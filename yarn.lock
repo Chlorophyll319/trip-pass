@@ -176,6 +176,30 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@prisma/client-runtime-utils@npm:7.9.0":
+  version: 7.9.0
+  resolution: "@prisma/client-runtime-utils@npm:7.9.0"
+  checksum: 10c0/796fb6fdab8f12f17c22364459740c23d641b47dfd6645c003a876c26882f1b5f10e181087ca4cae6566a5eef91b377d90c27f15d1bad4a1734a376bd5edef7e
+  languageName: node
+  linkType: hard
+
+"@prisma/client@npm:7.9.0":
+  version: 7.9.0
+  resolution: "@prisma/client@npm:7.9.0"
+  dependencies:
+    "@prisma/client-runtime-utils": "npm:7.9.0"
+  peerDependencies:
+    prisma: "*"
+    typescript: ">=5.4.0"
+  peerDependenciesMeta:
+    prisma:
+      optional: true
+    typescript:
+      optional: true
+  checksum: 10c0/0476ba5cfd0f5a0e8d3c595915032f0ae2fa3b5dfc6de5cc0d338829f0403ab066044b2ef791e21ae373bc2f7c3eecc269efd8542c079d106f259774dde283ac
+  languageName: node
+  linkType: hard
+
 "@prisma/config@npm:7.9.0":
   version: 7.9.0
   resolution: "@prisma/config@npm:7.9.0"
@@ -445,6 +469,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@trip-pass/database@workspace:packages/database"
   dependencies:
+    "@prisma/client": "npm:7.9.0"
+    dotenv: "npm:17.4.2"
     prisma: "npm:7.9.0"
   languageName: unknown
   linkType: soft
@@ -1375,17 +1401,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"dotenv@npm:17.4.2, dotenv@npm:^17.3.1":
+  version: 17.4.2
+  resolution: "dotenv@npm:17.4.2"
+  checksum: 10c0/164f8e77a646c8446867d5b588d26ea6005c8ea7c5eb41cf926f6113d23f2191355f6e0cfd95ea9bab98394a5b0a3f1e51a8399711b666fe55cc7b0bd745f942
+  languageName: node
+  linkType: hard
+
 "dotenv@npm:^16.4.5":
   version: 16.6.1
   resolution: "dotenv@npm:16.6.1"
   checksum: 10c0/15ce56608326ea0d1d9414a5c8ee6dcf0fffc79d2c16422b4ac2268e7e2d76ff5a572d37ffe747c377de12005f14b3cc22361e79fc7f1061cce81f77d2c973dc
-  languageName: node
-  linkType: hard
-
-"dotenv@npm:^17.3.1":
-  version: 17.4.2
-  resolution: "dotenv@npm:17.4.2"
-  checksum: 10c0/164f8e77a646c8446867d5b588d26ea6005c8ea7c5eb41cf926f6113d23f2191355f6e0cfd95ea9bab98394a5b0a3f1e51a8399711b666fe55cc7b0bd745f942
   languageName: node
   linkType: hard
 
