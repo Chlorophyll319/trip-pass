@@ -48,3 +48,5 @@ tsconfig.build.tsbuildinfo
 .claude
 .codex
 .agent
+
+skills-lock.json
