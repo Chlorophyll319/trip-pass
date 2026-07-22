@@ -1,0 +1,514 @@
+// Shared Prisma schema for TripPass
+// Used by both api and admin-api
+// Location: packages/database/prisma/schema.prisma
+//
+// 本檔以 .claude/ref/legacy-design/schema.prisma（Phase 0 舊 schema）為基礎，
+// 套用 PRD §6「資料模型修訂需求」的全部 enum/model 修訂重建。
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --------------------------------------
+// User (會員)
+// --------------------------------------
+
+model User {
+  id          String  @id @default(uuid())
+  email       String  @unique
+  password    String
+  name        String?
+  phoneNumber String?
+
+  emailVerified                  Boolean   @default(false)
+  emailVerificationCode          String?   @unique @db.VarChar(20)
+  emailVerificationCodeExpiresAt DateTime?
+
+  // 找回密碼（獨立欄位，不與 Email 驗證碼共用，見 PRD §2.1.3）
+  passwordResetCode          String?   @unique @db.VarChar(20)
+  passwordResetCodeExpiresAt DateTime?
+
+  // 登入安全
+  failedLoginAttempts Int       @default(0)
+  lockUntil           DateTime?
+
+  // 後台停用會員（見 PRD §2.7.4）
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders             Order[]
+  travelPasses       TravelPass[]
+  claimedCouponCodes CouponCode[]
+  couponRedemptions  CouponRedemption[]
+  notifications      Notification[]
+
+  @@map("users")
+}
+
+// --------------------------------------
+// Commerce (商品與訂單)
+// --------------------------------------
+
+enum PassType {
+  SINGLE_USE // 單次使用，如景點門票、機場貴賓室
+  MULTI_DAY // 效期內可重複使用，如上網卡、交通周遊券
+}
+
+model ProductCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique // 分類名稱 (e.g., "機場服務", "交通票券", "景點門票")
+  description String?
+  sort        Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+
+  @@index([isActive, sort])
+  @@map("product_categories")
+}
+
+model Product {
+  id Int @id @default(autoincrement())
+
+  categoryId Int?
+  category   ProductCategory? @relation(fields: [categoryId], references: [id])
+
+  name        String
+  description String?
+  price       Decimal @db.Decimal(10, 2)
+  currency    String  @default("TWD")
+
+  countryCode String? // ISO 3166-1 alpha-2, e.g., "JP", "TW"
+  type        PassType
+  duration    Int // 效期天數
+  partner     String?  @db.VarChar(100) // 提供服務的合作夥伴 (e.g., "Narita Airport Lounge")
+
+  // 最晚啟用天數：發券時計算 activateBefore = 發券時間 + activationDeadlineDays（見 PRD §2.4.2）
+  activationDeadlineDays Int @default(180)
+
+  originalPrice Decimal? @db.Decimal(10, 2) // 原價 (用於顯示折扣)
+
+  startTime DateTime? // 銷售開始時間
+  endTime   DateTime? // 銷售結束時間
+
+  instructions String? // 使用說明文字
+
+  sort     Int?
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderItems OrderItem[]
+  inventory  TravelPass[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+enum OrderStatus {
+  PENDING // 待付款
+  PAID // 付款成功
+  ISSUING // 票券發放中
+  ISSUED // 發放成功
+  FAILED // 發放失敗
+  CANCELLED // 逾時未付款取消（見 PRD §2.3.4）
+  REFUNDED // 已退款
+}
+
+model Order {
+  id      String @id @default(uuid())
+  orderNo String @unique @db.VarChar(20) // 傳給金流的唯一訂單編號（綠界 MerchantTradeNo 上限 20 字元英數字）
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // 下單請求冪等鍵（見 PRD §2.3.1）
+  clientRequestId String
+
+  status OrderStatus @default(PENDING)
+
+  // 金額組成：subtotal（折扣前小計）- discountAmount（折抵）= totalAmount（應付）
+  subtotal       Decimal @db.Decimal(10, 2)
+  discountAmount Decimal @default(0) @db.Decimal(10, 2)
+  totalAmount    Decimal @db.Decimal(10, 2)
+
+  paymentMethod String? // e.g., "Credit"
+  contactEmail  String? @db.VarChar(255)
+
+  // 異常註記（如金額不符、晚到付款等，見 PRD §2.3.3）
+  exceptionNote String?
+
+  // 發券重試持久化（見 PRD §2.3.3）
+  issueAttemptCount  Int       @default(0)
+  lastIssueAttemptAt DateTime?
+  lastIssueError     String?
+
+  // 退款登記（僅 SUPER_ADMIN，見 PRD §2.7.4）
+  refundedAt   DateTime?
+  refundedById String?
+  refundedBy   AdminUser? @relation(fields: [refundedById], references: [id])
+  refundNote   String?
+
+  deliveredAt DateTime? // 出貨（發放票券）時間
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items            OrderItem[]
+  travelPasses     TravelPass[]
+  paymentLogs      PaymentLog[]
+  couponCodesUsed  CouponCode[]
+  couponRedemption CouponRedemption?
+
+  @@unique([userId, clientRequestId])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("orders")
+}
+
+model PaymentLog {
+  id String @id @default(uuid())
+
+  // 查無對應訂單的異常通知時 orderId 為空（見 PRD §2.3.3）
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  provider      String // 金流供應商，e.g., "ecpay"、0 元訂單為 "system"
+  providerTxnId String // 綠界 TradeNo；0 元訂單為 orderNo（通知冪等鍵，見 PRD §6）
+  payload       Json // 金流供應商回傳的完整 callback JSON
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerTxnId])
+  @@index([orderId])
+  @@map("payment_logs")
+}
+
+model OrderItem {
+  id      String @id @default(uuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+
+  // 訂單商品快照 (避免商品之後改價/改名影響歷史訂單)
+  productNameSnapshot String  @db.VarChar(255)
+  unitPrice           Decimal @db.Decimal(10, 2)
+  quantity            Int     @default(1)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// --------------------------------------
+// TravelPass (數位票券資產)
+// --------------------------------------
+
+enum TravelPassStatus {
+  IN_STOCK // 在庫存中，尚未售出
+  RESERVED // 已被訂單預佔
+  ISSUED // 已發放給使用者，尚未啟用
+  ACTIVATED // 使用中/已啟用
+  USED // 已使用完畢
+  EXPIRED // 已過期
+  VOIDED // 退款作廢（終態，見 PRD §2.4.1）
+}
+
+model TravelPass {
+  id     String  @id @default(uuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // 來源訂單 (付款成功後發放時關聯)
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+
+  passCode  String  @unique // 票券兌換碼 / QR code 內容
+  qrCodeUrl String?
+  alias     String? // 使用者自訂別名 (e.g. "東京行程")
+
+  status TravelPassStatus @default(IN_STOCK)
+
+  // 最晚啟用期限：發券時計算 activateBefore = 發券時間 + product.activationDeadlineDays（見 PRD §2.4.2）
+  activateBefore DateTime?
+
+  // 使用效期（僅 MULTI_DAY）：validUntil = activatedAt + durationDaysSnapshot 天；不設 validFrom（activatedAt 即起算點）
+  validUntil  DateTime?
+  activatedAt DateTime?
+
+  // 履約資料快照：發券時寫入，商品事後修改不影響已售出票券（見 PRD §2.4.2）
+  passTypeSnapshot     PassType?
+  durationDaysSnapshot Int?
+  instructionsSnapshot String?
+
+  // 使用者手動封存（UI 顯示偏好，不影響票券狀態，見 PRD §2.4.1）
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 複合索引：加速查找「某商品」的「可用庫存」
+  @@index([productId, status])
+  @@index([userId])
+  @@index([orderId])
+  @@map("travel_passes")
+}
+
+// --------------------------------------
+// Coupon (優惠券)
+// --------------------------------------
+
+enum DiscountType {
+  ORDER_DISCOUNT // 訂單折扣
+  PRODUCT_DISCOUNT // 商品折扣
+}
+
+enum DiscountValueType {
+  PERCENTAGE // 百分比折扣
+  FIXED // 固定金額折扣
+}
+
+enum CouponStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+}
+
+enum CouponDistributionType {
+  FIXED // 固定代碼：所有人共用一個 code
+  RANDOM // 隨機代碼：每人一組唯一 code
+}
+
+model Coupon {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+
+  distributionType CouponDistributionType
+  fixedCode        String?                @unique // 僅 FIXED 模式使用
+
+  discountType      DiscountType
+  discountValueType DiscountValueType
+  discountValue     Decimal           @db.Decimal(10, 2)
+
+  maxUsagePerUser   Int      @default(1)
+  minOrderAmount    Decimal? @db.Decimal(10, 2)
+  maxDiscountAmount Decimal? @db.Decimal(10, 2)
+
+  totalQuantity Int? // 總使用次數上限 (FIXED 模式)
+  usedCount     Int  @default(0)
+
+  campaignStartAt DateTime
+  campaignEndAt   DateTime
+
+  applicableProductIds Int[] @default([])
+
+  status CouponStatus @default(DRAFT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  codes       CouponCode[]
+  redemptions CouponRedemption[]
+
+  @@index([status, campaignStartAt, campaignEndAt])
+  @@map("coupons")
+}
+
+enum CouponCodeStatus {
+  AVAILABLE
+  CLAIMED
+  USED
+  EXPIRED
+  REVOKED
+}
+
+model CouponCode {
+  id String @id @default(uuid())
+
+  couponId String
+  coupon   Coupon @relation(fields: [couponId], references: [id])
+
+  code String @unique
+
+  status CouponCodeStatus @default(AVAILABLE)
+
+  claimedById String?
+  claimedBy   User?     @relation(fields: [claimedById], references: [id])
+  claimedAt   DateTime?
+
+  usedAt DateTime?
+
+  // 核銷所在訂單（正式 relation，見 PRD §6）
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  batchId String? // 批次 ID (同一次生成的代碼)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  redemptions CouponRedemption[]
+
+  // 一人一活動限領一組（見 PRD §2.5.2）
+  @@unique([couponId, claimedById])
+  @@index([couponId, status])
+  @@index([claimedById])
+  @@index([batchId])
+  @@index([orderId])
+  @@map("coupon_codes")
+}
+
+model CouponRedemption {
+  id String @id @default(uuid())
+
+  couponId String
+  coupon   Coupon @relation(fields: [couponId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // RANDOM 模式必填，證明核銷的具體 code（見 PRD §6）
+  couponCodeId String?
+  couponCode   CouponCode? @relation(fields: [couponCodeId], references: [id])
+
+  // 正式 relation，一單最多一券（見 PRD §6）
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  discountAmount Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@unique([orderId])
+  @@index([couponId])
+  @@index([userId])
+  @@index([couponCodeId])
+  @@map("coupon_redemptions")
+}
+
+// --------------------------------------
+// Notification (站內通知)
+// --------------------------------------
+
+model Notification {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  title String
+  body  String
+
+  // 通知冪等鍵，如 order-issued:{orderId}（見 PRD §2.6）
+  eventKey String @unique
+
+  isRead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// --------------------------------------
+// Admin System (後台管理系統)
+// --------------------------------------
+
+enum AdminRole {
+  SUPER_ADMIN // 最高權限：可管理其他 Admin
+  ADMIN // 一般管理員：可編輯訂單、商品、優惠券
+  VIEWER // 只讀權限：僅可查看數據
+}
+
+enum AdminAction {
+  ADMIN_CREATE
+  ADMIN_UPDATE
+  ADMIN_DELETE
+  ADMIN_LOGIN
+  ADMIN_LOGOUT
+  USER_VIEW
+  USER_UPDATE
+  USER_BAN
+  ORDER_VIEW
+  ORDER_UPDATE
+  ORDER_REFUND
+  ORDER_REISSUE
+  PRODUCT_CREATE
+  PRODUCT_UPDATE
+  PRODUCT_DELETE
+  CATEGORY_CREATE
+  CATEGORY_UPDATE
+  CATEGORY_DELETE
+  COUPON_CREATE
+  COUPON_UPDATE
+  COUPON_DELETE
+  COUPON_CODE_GENERATE
+  COUPON_CODE_REVOKE
+  INVENTORY_ADD
+}
+
+model AdminUser {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  password            String // bcrypt hashed
+  name                String
+  role                AdminRole @default(ADMIN)
+  isActive            Boolean   @default(true)
+  failedLoginAttempts Int       @default(0)
+  lockUntil           DateTime?
+  lastLoginAt         DateTime?
+  lastLoginIp         String?
+
+  createdById   String?
+  createdBy     AdminUser?  @relation("AdminCreator", fields: [createdById], references: [id])
+  createdAdmins AdminUser[] @relation("AdminCreator")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  auditLogs      AdminAuditLog[]
+  refundedOrders Order[]
+
+  @@index([role, isActive])
+  @@map("admin_users")
+}
+
+model AdminAuditLog {
+  id String @id @default(uuid())
+
+  // 登入失敗嘗試可能查無帳號（見 PRD §2.7.3）
+  adminId        String?
+  admin          AdminUser? @relation(fields: [adminId], references: [id])
+  attemptedEmail String?
+
+  action AdminAction
+
+  targetType String? // e.g., "AdminUser", "Order", "Coupon"
+  targetId   String?
+
+  changes Json? // 變更前後的 diff
+
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([adminId, createdAt])
+  @@index([action])
+  @@map("admin_audit_logs")
+}

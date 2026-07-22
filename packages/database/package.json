@@ -1,0 +1,22 @@
+{
+  "name": "@trip-pass/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:validate": "prisma validate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "7.9.0"
+  },
+  "devDependencies": {
+    "dotenv": "17.4.2",
+    "prisma": "7.9.0"
+  }
+}
