@@ -1,0 +1,16 @@
+{
+  "name": "trip-pass",
+  "private": true,
+  "packageManager": "yarn@4.17.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": "24"
+  },
+  "devDependencies": {
+    "nx": "23.1.0",
+    "typescript": "7.0.2"
+  }
+}
