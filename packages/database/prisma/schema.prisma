@@ -3,7 +3,8 @@
 // Location: packages/database/prisma/schema.prisma
 //
 // 本檔以 .claude/ref/legacy-design/schema.prisma（Phase 0 舊 schema）為基礎，
-// 套用 PRD §6「資料模型修訂需求」的全部 enum/model 修訂重建。
+// 套用 PRD §6「資料模型修訂需求」建置（chore/database-package 票，對應 PRD v0.4 §6）。
+// v0.5 §6 增量修訂（chore/database-schema-v05 票）在此基礎上追加，非重建。
 
 generator client {
   provider = "prisma-client"
@@ -159,6 +160,9 @@ model Order {
   refundedBy   AdminUser? @relation(fields: [refundedById], references: [id])
   refundNote   String?
 
+  // 第一次呼叫「發起付款」端點時寫入一次，之後重用；0 元訂單維持 null（見 PRD §2.3.3/§6.2）
+  merchantTradeDate DateTime?
+
   deliveredAt DateTime? // 出貨（發放票券）時間
 
   createdAt DateTime @default(now())
@@ -238,9 +242,8 @@ model TravelPass {
   productId Int
   product   Product @relation(fields: [productId], references: [id])
 
-  passCode  String  @unique // 票券兌換碼 / QR code 內容
-  qrCodeUrl String?
-  alias     String? // 使用者自訂別名 (e.g. "東京行程")
+  passCode String  @unique // 票券兌換碼 / QR code 內容（QR 內容 = passCode，前端本地生成，不落地為 URL）
+  alias    String? // 使用者自訂別名 (e.g. "東京行程")
 
   status TravelPassStatus @default(IN_STOCK)
 
@@ -250,6 +253,9 @@ model TravelPass {
   // 使用效期（僅 MULTI_DAY）：validUntil = activatedAt + durationDaysSnapshot 天；不設 validFrom（activatedAt 即起算點）
   validUntil  DateTime?
   activatedAt DateTime?
+
+  // SINGLE_USE 核銷時間，與 activatedAt 同一原子更新寫入相同值；MULTI_DAY 不設定（見 PRD §2.4.1/§6.2）
+  usedAt DateTime?
 
   // 履約資料快照：發券時寫入，商品事後修改不影響已售出票券（見 PRD §2.4.2）
   passTypeSnapshot     PassType?
@@ -407,6 +413,12 @@ model CouponRedemption {
 // Notification (站內通知)
 // --------------------------------------
 
+enum NotificationType {
+  ORDER_ISSUED // 票券發放成功（含付款成功語意）
+  PASS_EXPIRING // 票券即將到期（提前 3 天）
+  REFUND_COMPLETED // 退款完成
+}
+
 model Notification {
   id String @id @default(uuid())
 
@@ -415,6 +427,12 @@ model Notification {
 
   title String
   body  String
+
+  // 事件類型（見 PRD §2.6/§6.2）
+  type NotificationType
+
+  // 僅存關聯資源 ID（如 orderId/travelPassId），供前端組深連結；不存任意 URL（見 PRD §2.6/§6.2）
+  metadata Json?
 
   // 通知冪等鍵，如 order-issued:{orderId}（見 PRD §2.6）
   eventKey String @unique
@@ -440,13 +458,14 @@ enum AdminRole {
 enum AdminAction {
   ADMIN_CREATE
   ADMIN_UPDATE
-  ADMIN_DELETE
   ADMIN_LOGIN
   ADMIN_LOGOUT
-  USER_VIEW
+  ADMIN_LOGIN_FAILED
+  ADMIN_DEACTIVATE
+  ADMIN_REACTIVATE
+  ADMIN_PASSWORD_CHANGE
   USER_UPDATE
   USER_BAN
-  ORDER_VIEW
   ORDER_UPDATE
   ORDER_REFUND
   ORDER_REISSUE
