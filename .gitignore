@@ -50,3 +50,4 @@ tsconfig.build.tsbuildinfo
 .agent
 
 skills-lock.json
+.mcp.json
